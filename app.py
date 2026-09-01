@@ -1,18 +1,13 @@
 import os
 import streamlit as st
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
+from groq import Groq
+from pypdf import PdfReader
+from sentence_transformers import SentenceTransformer
+import chromadb
 
 st.set_page_config(page_title="AI Assistant", page_icon="🤖", layout="wide")
-
 st.title("🤖 AI Document Assistant & Q&A")
-st.caption("Powered by Groq (Llama 3.3) & Streamlit Cloud")
+st.caption("Powered by Groq & Streamlit Cloud")
 
 # Groq API Key
 groq_api_key = st.secrets.get("GROQ_API_KEY")
@@ -21,15 +16,8 @@ if not groq_api_key:
     st.error("GROQ_API_KEY not found in Streamlit Secrets! Please add it in App Settings.")
     st.stop()
 
-# Initialize LLM
-# Initialize LLM
-llm = ChatGroq(
-    model_name="llama-3.1-8b-instant",
-    groq_api_key=groq_api_key,
-    temperature=0.3
-)
-
-
+# Initialize Groq Client directly
+client = Groq(api_key=groq_api_key)
 
 # Sidebar for PDF Upload
 with st.sidebar:
@@ -44,34 +32,22 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # Process PDF if uploaded
-vectorstore = None
+context_text = ""
 if uploaded_file is not None:
-    temp_pdf_path = f"./temp_{uploaded_file.name}"
-    with open(temp_pdf_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-
-    with st.spinner("Processing document..."):
-        loader = PyPDFLoader(temp_pdf_path)
-        docs = loader.load()
-        
-        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        splits = text_splitter.split_documents(docs)
-        
-        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
+    with st.spinner("Extracting document text..."):
+        reader = PdfReader(uploaded_file)
+        full_text = ""
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                full_text += text + "\n"
+        context_text = full_text[:12000] # Take first relevant chunks
         st.sidebar.success("Document processed successfully!")
-    
-    if os.path.exists(temp_pdf_path):
-        os.remove(temp_pdf_path)
 
 # Display Chat Messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-
-# Format documents helper
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
 
 # User Input
 if prompt := st.chat_input("Ask a question..."):
@@ -82,27 +58,27 @@ if prompt := st.chat_input("Ask a question..."):
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         
-        if vectorstore is not None:
-            retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-            prompt_template = ChatPromptTemplate.from_template(
-                "You are an assistant for question-answering tasks. "
-                "Use the following pieces of retrieved context to answer the question. "
-                "If you don't know the answer, say that you don't know. Keep answers concise.\n\n"
-                "Context:\n{context}\n\n"
-                "Question: {question}\n\n"
-                "Answer:"
+        # Prepare system & user prompt
+        if context_text:
+            system_instruction = (
+                "You are an assistant for document question-answering. "
+                "Use the following context to answer accurately and concisely:\n\n"
+                f"{context_text}"
             )
-            
-            rag_chain = (
-                {"context": retriever | format_docs, "question": RunnablePassthrough()}
-                | prompt_template
-                | llm
-                | StrOutputParser()
-            )
-            full_response = rag_chain.invoke(prompt)
         else:
-            response = llm.invoke(prompt)
-            full_response = response.content
+            system_instruction = "You are a helpful, concise AI assistant."
 
-        message_placeholder.markdown(full_response)
-        st.session_state.messages.append({"role": "assistant", "content": full_response})  
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt}
+                ],
+                model="llama-3.3-70b-versatile",
+                temperature=0.3
+            )
+            full_response = chat_completion.choices[0].message.content
+            message_placeholder.markdown(full_response)
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
+        except Exception as e:
+            message_placeholder.error(f"Error: {e}")
