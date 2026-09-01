@@ -1,102 +1,101 @@
 import os
-import tempfile
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_groq import ChatGroq
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.prompts import ChatPromptTemplate
 
-st.set_page_config(
-    page_title="AI Document Assistant",
-    page_icon="🤖",
-    layout="wide"
-)
+st.set_page_config(page_title="AI Assistant", page_icon="🤖", layout="wide")
+
 st.title("🤖 AI Document Assistant & Q&A")
 st.caption("Powered by Groq (Llama 3.3) & Streamlit Cloud")
 
-# API Key check from Streamlit Secrets or sidebar
-groq_api_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
+# Groq API Key retrieval from Streamlit secrets
+groq_api_key = st.secrets.get("GROQ_API_KEY")
 
 if not groq_api_key:
-    groq_api_key = st.sidebar.text_input("Enter Groq API Key", type="password")
-
-if not groq_api_key:
-    st.warning("⚠️ Please provide a Groq API Key in secrets or sidebar.")
+    st.error("GROQ_API_KEY not found in Streamlit Secrets! Please add it in App Settings.")
     st.stop()
 
-# LLM & Embeddings initialization
+# Initialize LLM with the updated correct model ID
 llm = ChatGroq(
+    model="llama-3.3-70b-versatile",
     groq_api_key=groq_api_key,
-    model_name="llama-3.3-70b-versatile",
-    streaming=True
+    temperature=0.3
 )
 
-@st.cache_resource
-def load_embeddings():
-    return HuggingFaceEmbeddings(
-        model_name="all-MiniLM-L6-v2",
-        model_kwargs={"device": "cpu"}
-    )
-
-embeddings = load_embeddings()
-
-# PDF Upload & Vector Store Setup
+# Sidebar for PDF Upload
 with st.sidebar:
     st.header("📄 Upload Document")
     uploaded_file = st.file_uploader("Upload PDF here", type=["pdf"])
-    
-    if st.button("Clear Chat", use_container_width=True):
+    if st.button("Clear Chat"):
         st.session_state.messages = []
-        st.session_state.pop("vectorstore", None)
         st.rerun()
 
-    if uploaded_file and "vectorstore" not in st.session_state:
-        with st.spinner("Processing PDF..."):
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(uploaded_file.getvalue())
-                tmp_path = tmp.name
-
-            loader = PyPDFLoader(tmp_path)
-            docs = loader.load()
-            text_splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=70)
-            splits = text_splitter.split_documents(docs)
-
-            st.session_state.vectorstore = Chroma.from_documents(
-                documents=splits,
-                embedding=embeddings
-            )
-            os.remove(tmp_path)
-            st.success("✅ Document Indexed Successfully!")
-
-# Chat Interface
+# Initialize Chat History
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+# Process PDF if uploaded
+vectorstore = None
+if uploaded_file is not None:
+    temp_pdf_path = f"./temp_{uploaded_file.name}"
+    with open(temp_pdf_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
 
-if user_prompt := st.chat_input("Ask a question about the document..."):
-    st.chat_message("user").markdown(user_prompt)
-    st.session_state.messages.append({"role": "user", "content": user_prompt})
+    with st.spinner("Processing document..."):
+        loader = PyPDFLoader(temp_pdf_path)
+        docs = loader.load()
+        
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        splits = text_splitter.split_documents(docs)
+        
+        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
+        st.sidebar.success("Document processed successfully!")
+    
+    if os.path.exists(temp_pdf_path):
+        os.remove(temp_pdf_path)
+
+# Display Chat Messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# User Input
+if prompt := st.chat_input("Ask a question..."):
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
     with st.chat_message("assistant"):
-        placeholder = st.empty()
-        full_response = ""
+        message_placeholder = st.empty()
         
-        if "vectorstore" in st.session_state and st.session_state.vectorstore:
-            retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 3})
-            relevant_docs = retriever.invoke(user_prompt)
-            context = "\n\n".join([doc.page_content for doc in relevant_docs])
-            prompt_template = f"Context:\n{context}\n\nQuestion: {user_prompt}\nAnswer using the context provided above:"
-            response_stream = llm.stream(prompt_template)
-        else:
-            response_stream = llm.stream(user_prompt)
-
-        for chunk in response_stream:
-            full_response += chunk.content
-            placeholder.markdown(full_response + "▌")
+        if vectorstore is not None:
+            retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+            system_prompt = (
+                "You are an assistant for question-answering tasks. "
+                "Use the following pieces of retrieved context to answer "
+                "the question. If you don't know the answer, say that you "
+                "don't know. Keep answers clear and concise.\n\n"
+                "{context}"
+            )
+            qa_prompt = ChatPromptTemplate.from_messages([
+                ("system", system_prompt),
+                ("human", "{input}")
+            ])
+            question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
+            rag_chain = create_retrieval_chain(retriever, question_answer_chain)
             
-        placeholder.markdown(full_response)
+            response = rag_chain.invoke({"input": prompt})
+            full_response = response["answer"]
+        else:
+            response = llm.invoke(prompt)
+            full_response = response.content
+
+        message_placeholder.markdown(full_response)
         st.session_state.messages.append({"role": "assistant", "content": full_response})
