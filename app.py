@@ -5,23 +5,23 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain_groq import ChatGroq
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
 
 st.set_page_config(page_title="AI Assistant", page_icon="🤖", layout="wide")
 
 st.title("🤖 AI Document Assistant & Q&A")
 st.caption("Powered by Groq (Llama 3.3) & Streamlit Cloud")
 
-# Groq API Key retrieval from Streamlit secrets
+# Groq API Key
 groq_api_key = st.secrets.get("GROQ_API_KEY")
 
 if not groq_api_key:
     st.error("GROQ_API_KEY not found in Streamlit Secrets! Please add it in App Settings.")
     st.stop()
 
-# Initialize LLM with the updated correct model ID
+# Initialize LLM
 llm = ChatGroq(
     model="llama-3.3-70b-versatile",
     groq_api_key=groq_api_key,
@@ -66,6 +66,10 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+# Format documents helper
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
 # User Input
 if prompt := st.chat_input("Ask a question..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -77,22 +81,22 @@ if prompt := st.chat_input("Ask a question..."):
         
         if vectorstore is not None:
             retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-            system_prompt = (
+            prompt_template = ChatPromptTemplate.from_template(
                 "You are an assistant for question-answering tasks. "
-                "Use the following pieces of retrieved context to answer "
-                "the question. If you don't know the answer, say that you "
-                "don't know. Keep answers clear and concise.\n\n"
-                "{context}"
+                "Use the following pieces of retrieved context to answer the question. "
+                "If you don't know the answer, say that you don't know. Keep answers concise.\n\n"
+                "Context:\n{context}\n\n"
+                "Question: {question}\n\n"
+                "Answer:"
             )
-            qa_prompt = ChatPromptTemplate.from_messages([
-                ("system", system_prompt),
-                ("human", "{input}")
-            ])
-            question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
-            rag_chain = create_retrieval_chain(retriever, question_answer_chain)
             
-            response = rag_chain.invoke({"input": prompt})
-            full_response = response["answer"]
+            rag_chain = (
+                {"context": retriever | format_docs, "question": RunnablePassthrough()}
+                | prompt_template
+                | llm
+                | StrOutputParser()
+            )
+            full_response = rag_chain.invoke(prompt)
         else:
             response = llm.invoke(prompt)
             full_response = response.content
