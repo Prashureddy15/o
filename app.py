@@ -22,11 +22,14 @@ if not groq_api_key:
     st.stop()
 
 # Initialize LLM
+# Initialize LLM
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile",
+    model_name="llama-3.1-8b-instant",
     groq_api_key=groq_api_key,
     temperature=0.3
 )
+
+
 
 # Sidebar for PDF Upload
 with st.sidebar:
