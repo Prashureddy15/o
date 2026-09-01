@@ -1,10 +1,5 @@
 streamlit
-langchain
-langchain-community
-langchain-core
-langchain-groq
-langchain-text-splitters
+groq
 pypdf
-chromadb
 sentence-transformers
-
+chromadb
