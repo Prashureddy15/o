@@ -65,14 +65,15 @@ if prompt := st.chat_input("Ask a question..."):
         else:
             system_instruction = "You are a helpful, concise AI assistant."
 
-        try:
+      try:
             chat_completion = client.chat.completions.create(
                 messages=[
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": prompt}
                 ],
-                model="llama-3.1-8b-instant",
+                model="llama3-8b-8192",
                 temperature=0.3
+            
             )
             full_response = chat_completion.choices[0].message.content
             message_placeholder.markdown(full_response)
