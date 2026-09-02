@@ -2,8 +2,6 @@ import os
 import streamlit as st
 from groq import Groq
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
-import chromadb
 
 st.set_page_config(page_title="AI Assistant", page_icon="🤖", layout="wide")
 st.title("🤖 AI Document Assistant & Q&A")
@@ -16,7 +14,7 @@ if not groq_api_key:
     st.error("GROQ_API_KEY not found in Streamlit Secrets! Please add it in App Settings.")
     st.stop()
 
-# Initialize Groq Client directly
+# Initialize Groq Client
 client = Groq(api_key=groq_api_key)
 
 # Sidebar for PDF Upload
@@ -41,7 +39,7 @@ if uploaded_file is not None:
             text = page.extract_text()
             if text:
                 full_text += text + "\n"
-        context_text = full_text[:12000] # Take first relevant chunks
+        context_text = full_text[:12000]
         st.sidebar.success("Document processed successfully!")
 
 # Display Chat Messages
@@ -58,7 +56,6 @@ if prompt := st.chat_input("Ask a question..."):
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         
-        # Prepare system & user prompt
         if context_text:
             system_instruction = (
                 "You are an assistant for document question-answering. "
@@ -74,7 +71,6 @@ if prompt := st.chat_input("Ask a question..."):
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": prompt}
                 ],
-                model="llama-3.3-70b-versatile", 
                 model="llama-3.1-8b-instant",
                 temperature=0.3
             )
