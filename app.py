@@ -74,7 +74,8 @@ if prompt := st.chat_input("Ask a question..."):
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": prompt}
                 ],
-                model="llama-3.3-70b-versatile",
+                model="llama-3.3-70b-versatile", 
+                model="llama-3.1-8b-instant",
                 temperature=0.3
             )
             full_response = chat_completion.choices[0].message.content
